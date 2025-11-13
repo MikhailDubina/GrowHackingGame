@@ -1,0 +1,176 @@
+import { z } from 'zod';
+import { publicProcedure, router } from '../_core/trpc';
+import { AuthService } from '../services/authService';
+import { SMSService } from '../services/smsService';
+import { sdk } from '../_core/sdk';
+import { COOKIE_NAME, ONE_YEAR_MS } from '@shared/const';
+
+export const authRouter = router({
+  // Регистрация
+  register: publicProcedure
+    .input(z.object({
+      username: z.string().min(3).max(20),
+      phone: z.string().regex(/^\+[1-9]\d{10,14}$/),
+      password: z.string().min(6)
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        const result = await AuthService.register(
+          input.username,
+          input.phone,
+          input.password
+        );
+        return { success: true, data: result };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Отправка SMS-кода
+  sendVerificationCode: publicProcedure
+    .input(z.object({
+      phone: z.string().regex(/^\+[1-9]\d{10,14}$/)
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        // Валидация номера
+        if (!SMSService.validatePhone(input.phone)) {
+          return { success: false, error: 'Invalid phone number format' };
+        }
+        
+        const result = await AuthService.sendVerificationCode(input.phone);
+        return { success: true, data: result };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Проверка SMS-кода
+  verifyCode: publicProcedure
+    .input(z.object({
+      phone: z.string(),
+      code: z.string().length(6)
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        await AuthService.verifyCode(input.phone, input.code);
+        return { success: true };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Вход по телефону и паролю
+  login: publicProcedure
+    .input(z.object({
+      phone: z.string(),
+      password: z.string()
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await AuthService.login(input.phone, input.password);
+        
+        // Create JWT session token and set cookie
+        const sessionToken = await sdk.createSessionToken(result.user.id, {
+          name: result.user.username
+        });
+        
+        ctx.res.cookie(COOKIE_NAME, sessionToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: ONE_YEAR_MS,
+          path: '/'
+        });
+        
+        return { success: true, data: result };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Вход по SMS-коду
+  loginWithSMS: publicProcedure
+    .input(z.object({
+      phone: z.string(),
+      code: z.string().length(6)
+    }))
+    .mutation(async ({ input, ctx }) => {
+      try {
+        const result = await AuthService.loginWithSMS(input.phone, input.code);
+        
+        // Create JWT session token and set cookie
+        const sessionToken = await sdk.createSessionToken(result.user.id, {
+          name: result.user.username
+        });
+        
+        ctx.res.cookie(COOKIE_NAME, sessionToken, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: ONE_YEAR_MS,
+          path: '/'
+        });
+        
+        return { success: true, data: result };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Проверка токена
+  verifyToken: publicProcedure
+    .input(z.object({
+      token: z.string()
+    }))
+    .query(async ({ input }) => {
+      try {
+        const user = await AuthService.verifyToken(input.token);
+        return { success: true, data: user };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Выход
+  logout: publicProcedure
+    .input(z.object({
+      token: z.string()
+    }))
+    .mutation(async ({ input }) => {
+      try {
+        await AuthService.logout(input.token);
+        return { success: true };
+      } catch (error: any) {
+        return { success: false, error: error.message };
+      }
+    }),
+  
+  // Get current authenticated user
+  getCurrentUser: publicProcedure
+    .query(async ({ ctx }) => {
+      if (!ctx.user) {
+        return null;
+      }
+      
+      return {
+        id: ctx.user.id,
+        username: ctx.user.username || 'User',
+        accountType: ctx.user.accountType || 'demo'
+      };
+    }),
+  
+  // Alias for getCurrentUser (used by useAuth hook)
+  me: publicProcedure
+    .query(async ({ ctx }) => {
+      if (!ctx.user) {
+        return null;
+      }
+      
+      return {
+        id: ctx.user.id,
+        username: ctx.user.username || 'User',
+        accountType: ctx.user.accountType || 'demo'
+      };
+    })
+});
