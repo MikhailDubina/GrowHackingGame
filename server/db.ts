@@ -1,20 +1,22 @@
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
-import mysql from "mysql2/promise";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
 import { InsertUser, users, balances, playerStats } from "../drizzle/schema";
 import { ENV } from './_core/env';
-import { randomUUID } from 'crypto';
 
 let _db: ReturnType<typeof drizzle> | null = null;
-let _pool: mysql.Pool | null = null;
+let _pool: Pool | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _pool = mysql.createPool(process.env.DATABASE_URL);
+      _pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      });
       _db = drizzle(_pool);
-      console.log("[Database] Connected to MySQL");
+      console.log("[Database] Connected to PostgreSQL");
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -24,7 +26,7 @@ export async function getDb() {
   return _db;
 }
 
-// Get raw MySQL connection pool for raw SQL queries
+// Get raw PostgreSQL connection pool for raw SQL queries
 export async function getRawDb() {
   if (!_pool && process.env.DATABASE_URL) {
     await getDb(); // Initialize pool if not already done
@@ -78,7 +80,9 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    const result = await db.insert(users).values(values).onDuplicateKeyUpdate({
+    // PostgreSQL upsert using onConflictDoUpdate
+    await db.insert(users).values(values).onConflictDoUpdate({
+      target: users.id,
       set: updateSet,
     });
 
