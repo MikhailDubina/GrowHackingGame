@@ -1,10 +1,13 @@
-import mysql from 'mysql2/promise';
+import { Pool } from 'pg';
 
 export class GlobalStatsService {
   private async getConnection() {
     try {
-      const connection = await mysql.createConnection(process.env.DATABASE_URL!);
-      return connection;
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL!,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined,
+      });
+      return pool;
     } catch (error) {
       console.error('[GlobalStats] Connection error:', error);
       return null;
@@ -12,11 +15,11 @@ export class GlobalStatsService {
   }
 
   async getGlobalStats() {
-    let connection = null;
+    let pool = null;
     try {
-      connection = await this.getConnection();
+      pool = await this.getConnection();
       
-      if (!connection) {
+      if (!pool) {
         console.error('[GlobalStats] No database connection');
         return {
           totalPlayers: 0,
@@ -28,36 +31,38 @@ export class GlobalStatsService {
       }
       
       // Get total players
-      const [playersRows] = await connection.execute(
+      const playersResult = await pool.query(
         'SELECT COUNT(DISTINCT id) as total FROM users'
       );
-      const totalPlayers = Number((playersRows as any)[0]?.total) || 0;
+      const totalPlayers = Number(playersResult.rows[0]?.total) || 0;
       
       // Get total games
-      const [gamesRows] = await connection.execute(
-        'SELECT COUNT(*) as total FROM gameRounds'
+      const gamesResult = await pool.query(
+        'SELECT COUNT(*) as total FROM game_rounds'
       );
-      const totalGames = Number((gamesRows as any)[0]?.total) || 0;
+      const totalGames = Number(gamesResult.rows[0]?.total) || 0;
       
       // Get total payouts
-      const [payoutsRows] = await connection.execute(
-        'SELECT COALESCE(SUM(payout), 0) as total FROM gameRounds WHERE result IN ("win", "cashout")'
+      const payoutsResult = await pool.query(
+        'SELECT COALESCE(SUM(win_amount), 0) as total FROM game_rounds WHERE result IN ($1, $2)',
+        ['win', 'cashout']
       );
-      const totalPayouts = Number((payoutsRows as any)[0]?.total) || 0;
+      const totalPayouts = Number(payoutsResult.rows[0]?.total) || 0;
       
       // Get active players (last 24h)
-      const [activeRows] = await connection.execute(
-        'SELECT COUNT(DISTINCT userId) as total FROM gameRounds WHERE createdAt >= DATE_SUB(NOW(), INTERVAL 24 HOUR)'
+      const activeResult = await pool.query(
+        'SELECT COUNT(DISTINCT user_id) as total FROM game_rounds WHERE created_at >= NOW() - INTERVAL \'24 hours\''
       );
-      const activePlayers = Number((activeRows as any)[0]?.total) || 0;
+      const activePlayers = Number(activeResult.rows[0]?.total) || 0;
       
       // Get biggest win
-      const [winRows] = await connection.execute(
-        'SELECT COALESCE(MAX(payout), 0) as biggest FROM gameRounds WHERE result IN ("win", "cashout")'
+      const winResult = await pool.query(
+        'SELECT COALESCE(MAX(win_amount), 0) as biggest FROM game_rounds WHERE result IN ($1, $2)',
+        ['win', 'cashout']
       );
-      const biggestWin = Number((winRows as any)[0]?.biggest) || 0;
+      const biggestWin = Number(winResult.rows[0]?.biggest) || 0;
       
-      await connection.end();
+      await pool.end();
       
       console.log('[GlobalStats] Success:', { 
         totalPlayers, 
@@ -76,9 +81,9 @@ export class GlobalStatsService {
       };
     } catch (error) {
       console.error('[GlobalStats] Query error:', error);
-      if (connection) {
+      if (pool) {
         try {
-          await connection.end();
+          await pool.end();
         } catch (e) {
           // Ignore close errors
         }
