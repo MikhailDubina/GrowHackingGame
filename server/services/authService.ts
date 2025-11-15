@@ -23,16 +23,16 @@ function generateToken(userId: string): string {
 export class AuthService {
   // Регистрация нового пользователя
   static async register(username: string, phone: string, password: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Проверка существования пользователя
-    const [existingUsers]: any = await db.execute(
-      'SELECT id FROM users WHERE username = ? OR phone = ?',
+    const existingUsers = await pool.query(
+      'SELECT id FROM users WHERE username = $1 OR phone = $2',
       [username, phone]
     );
     
-    if (existingUsers.length > 0) {
+    if (existingUsers.rows.length > 0) {
       throw new Error('Username or phone already exists');
     }
     
@@ -40,15 +40,15 @@ export class AuthService {
     const userId = `user_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
     const passwordHash = hashPassword(password);
     
-    await db.execute(
-      `INSERT INTO users (id, username, phone, passwordHash, accountType, phoneVerified, isActive, createdAt) 
-       VALUES (?, ?, ?, ?, 'real', FALSE, TRUE, NOW())`,
+    await pool.query(
+      `INSERT INTO users (id, username, phone, "passwordHash", "accountType", "phoneVerified", "isActive", "createdAt") 
+       VALUES ($1, $2, $3, $4, 'real', FALSE, TRUE, NOW())`,
       [userId, username, phone, passwordHash]
     );
     
     // Создание баланса
-    await db.execute(
-      'INSERT INTO balances (userId, coins) VALUES (?, 1000)',
+    await pool.query(
+      'INSERT INTO balances ("userId", coins) VALUES ($1, 1000)',
       [userId]
     );
     
@@ -57,17 +57,17 @@ export class AuthService {
   
   // Отправка SMS-кода
   static async sendVerificationCode(phone: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Генерация кода
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const codeId = `sms_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     
-    // Сохранение кода с expiresAt через SQL DATE_ADD
-    await db.execute(
-      `INSERT INTO smsVerificationCodes (id, phone, code, expiresAt, verified, attempts) 
-       VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE), FALSE, 0)`,
+    // Сохранение кода с expiresAt через PostgreSQL INTERVAL
+    await pool.query(
+      `INSERT INTO "smsVerificationCodes" (id, phone, code, "expiresAt", verified, attempts) 
+       VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes', FALSE, 0)`,
       [codeId, phone, code]
     );
     
@@ -79,27 +79,27 @@ export class AuthService {
   
   // Проверка SMS-кода
   static async verifyCode(phone: string, code: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Поиск кода
-    const [codes]: any = await db.execute(
-      `SELECT * FROM smsVerificationCodes 
-       WHERE phone = ? AND code = ? AND verified = FALSE AND expiresAt > NOW()
-       ORDER BY createdAt DESC LIMIT 1`,
+    const codes = await pool.query(
+      `SELECT * FROM "smsVerificationCodes" 
+       WHERE phone = $1 AND code = $2 AND verified = FALSE AND "expiresAt" > NOW()
+       ORDER BY "createdAt" DESC LIMIT 1`,
       [phone, code]
     );
     
-    if (codes.length === 0) {
+    if (codes.rows.length === 0) {
       // Увеличиваем счетчик попыток
-      await db.execute(
-        'UPDATE smsVerificationCodes SET attempts = attempts + 1 WHERE phone = ? AND verified = FALSE',
+      await pool.query(
+        'UPDATE "smsVerificationCodes" SET attempts = attempts + 1 WHERE phone = $1 AND verified = FALSE',
         [phone]
       );
       throw new Error('Invalid or expired code');
     }
     
-    const verificationCode = codes[0];
+    const verificationCode = codes.rows[0];
     
     // Проверка количества попыток
     if (verificationCode.attempts >= 3) {
@@ -107,14 +107,14 @@ export class AuthService {
     }
     
     // Отметка кода как использованного
-    await db.execute(
-      'UPDATE smsVerificationCodes SET verified = TRUE WHERE id = ?',
+    await pool.query(
+      'UPDATE "smsVerificationCodes" SET verified = TRUE WHERE id = $1',
       [verificationCode.id]
     );
     
     // Обновление статуса верификации телефона
-    await db.execute(
-      'UPDATE users SET phoneVerified = TRUE WHERE phone = ?',
+    await pool.query(
+      'UPDATE users SET "phoneVerified" = TRUE WHERE phone = $1',
       [phone]
     );
     
@@ -123,20 +123,20 @@ export class AuthService {
   
   // Вход по телефону и паролю
   static async login(phone: string, password: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Поиск пользователя
-    const [users]: any = await db.execute(
-      'SELECT * FROM users WHERE phone = ? AND isActive = TRUE',
+    const users = await pool.query(
+      'SELECT * FROM users WHERE phone = $1 AND "isActive" = TRUE',
       [phone]
     );
     
-    if (users.length === 0) {
+    if (users.rows.length === 0) {
       throw new Error('User not found');
     }
     
-    const user = users[0];
+    const user = users.rows[0];
     
     // Проверка пароля
     if (!verifyPassword(password, user.passwordHash)) {
@@ -149,14 +149,14 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 дней
     
     // Сохранение сессии
-    await db.execute(
-      'INSERT INTO sessions (id, userId, token, expiresAt) VALUES (?, ?, ?, ?)',
+    await pool.query(
+      'INSERT INTO sessions (id, "userId", token, "expiresAt") VALUES ($1, $2, $3, $4)',
       [sessionId, user.id, token, expiresAt]
     );
     
     // Обновление времени входа
-    await db.execute(
-      'UPDATE users SET lastSignedIn = NOW() WHERE id = ?',
+    await pool.query(
+      'UPDATE users SET "lastSignedIn" = NOW() WHERE id = $1',
       [user.id]
     );
     
@@ -174,23 +174,23 @@ export class AuthService {
   
   // Вход по SMS-коду (без пароля)
   static async loginWithSMS(phone: string, code: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Проверка кода
     await this.verifyCode(phone, code);
     
     // Поиск пользователя
-    const [users]: any = await db.execute(
-      'SELECT * FROM users WHERE phone = ? AND isActive = TRUE',
+    const users = await pool.query(
+      'SELECT * FROM users WHERE phone = $1 AND "isActive" = TRUE',
       [phone]
     );
     
-    if (users.length === 0) {
+    if (users.rows.length === 0) {
       throw new Error('User not found');
     }
     
-    const user = users[0];
+    const user = users.rows[0];
     
     // Генерация токена
     const token = generateToken(user.id);
@@ -198,14 +198,14 @@ export class AuthService {
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     
     // Сохранение сессии
-    await db.execute(
-      'INSERT INTO sessions (id, userId, token, expiresAt) VALUES (?, ?, ?, ?)',
+    await pool.query(
+      'INSERT INTO sessions (id, "userId", token, "expiresAt") VALUES ($1, $2, $3, $4)',
       [sessionId, user.id, token, expiresAt]
     );
     
     // Обновление времени входа
-    await db.execute(
-      'UPDATE users SET lastSignedIn = NOW() WHERE id = ?',
+    await pool.query(
+      'UPDATE users SET "lastSignedIn" = NOW() WHERE id = $1',
       [user.id]
     );
     
@@ -223,59 +223,60 @@ export class AuthService {
   
   // Проверка токена
   static async verifyToken(token: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
-    const [sessions]: any = await db.execute(
-      'SELECT * FROM sessions WHERE token = ? AND expiresAt > NOW()',
+    const sessions = await pool.query(
+      'SELECT * FROM sessions WHERE token = $1 AND "expiresAt" > NOW()',
       [token]
     );
     
-    if (sessions.length === 0) {
+    if (sessions.rows.length === 0) {
       throw new Error('Invalid or expired token');
     }
     
-    const session = sessions[0];
+    const session = sessions.rows[0];
     
     // Получение пользователя
-    const [users]: any = await db.execute(
-      'SELECT * FROM users WHERE id = ? AND isActive = TRUE',
+    const users = await pool.query(
+      'SELECT * FROM users WHERE id = $1 AND "isActive" = TRUE',
       [session.userId]
     );
     
-    if (users.length === 0) {
+    if (users.rows.length === 0) {
       throw new Error('User not found');
     }
     
-    return users[0];
+    return users.rows[0];
   }
   
   // Выход
   static async logout(token: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
-    await db.execute(
-      'DELETE FROM sessions WHERE token = ?',
+    await pool.query(
+      'DELETE FROM sessions WHERE token = $1',
       [token]
     );
     
     return true;
   }
+  
   // Get user by phone number
   static async getUserByPhone(phone: string) {
-    const db = await getRawDb();
-    if (!db) throw new Error('Database not available');
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
-    const [users]: any = await db.execute(
-      'SELECT id, username, phone, accountType, phoneVerified FROM users WHERE phone = ? LIMIT 1',
+    const users = await pool.query(
+      'SELECT id, username, phone, "accountType", "phoneVerified" FROM users WHERE phone = $1 LIMIT 1',
       [phone]
     );
     
-    if (users.length === 0) {
+    if (users.rows.length === 0) {
       return null;
     }
     
-    return users[0];
+    return users.rows[0];
   }
 }

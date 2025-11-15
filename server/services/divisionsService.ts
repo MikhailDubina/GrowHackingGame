@@ -1,4 +1,4 @@
-import { getDb } from '../db';
+import { getRawDb } from '../db';
 import { randomUUID } from 'crypto';
 
 export interface Division {
@@ -19,22 +19,23 @@ export interface Division {
 
 export class DivisionsService {
   async getUserDivision(userId: string) {
-    const db = getDb();
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Get user's current division
-    const userDivision = await db.execute(
+    const userDivision = await pool.query(
       `SELECT 
         ud.*,
         d.name,
         d.tier,
-        d.monthlySpendRequired,
+        d."monthlySpendRequired",
         d.icon,
         d.color,
         d.benefits
-      FROM userDivisions ud
-      JOIN divisions d ON ud.divisionId = d.id
-      WHERE ud.userId = ?
-      ORDER BY ud.assignedAt DESC
+      FROM "userDivisions" ud
+      JOIN divisions d ON ud."divisionId" = d.id
+      WHERE ud."userId" = $1
+      ORDER BY ud."assignedAt" DESC
       LIMIT 1`,
       [userId]
     );
@@ -44,27 +45,28 @@ export class DivisionsService {
       const divisionId = 'bronze';
       const id = randomUUID();
       
-      await db.execute(
-        'INSERT INTO userDivisions (id, userId, divisionId, monthlySpend) VALUES (?, ?, ?, ?)',
+      await pool.query(
+        'INSERT INTO "userDivisions" (id, "userId", "divisionId", "monthlySpend") VALUES ($1, $2, $3, $4)',
         [id, userId, divisionId, 0]
       );
       
       // Get bronze division
-      const bronze = await db.execute(
-        'SELECT * FROM divisions WHERE id = ?',
+      const bronze = await pool.query(
+        'SELECT * FROM divisions WHERE id = $1',
         [divisionId]
       );
       
-      return bronze.rows[0] as any;
+      return bronze.rows[0];
     }
     
-    return userDivision.rows[0] as any;
+    return userDivision.rows[0];
   }
   
   async getAllDivisions() {
-    const db = getDb();
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
-    const result = await db.execute(
+    const result = await pool.query(
       'SELECT * FROM divisions ORDER BY tier ASC'
     );
     
@@ -72,15 +74,16 @@ export class DivisionsService {
   }
   
   async updateMonthlySpend(userId: string, amount: number) {
-    const db = getDb();
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Get current user division
     const userDivision = await this.getUserDivision(userId);
     const newMonthlySpend = (userDivision.monthlySpend || 0) + amount;
     
     // Update monthly spend
-    await db.execute(
-      'UPDATE userDivisions SET monthlySpend = ? WHERE userId = ? AND divisionId = ?',
+    await pool.query(
+      'UPDATE "userDivisions" SET "monthlySpend" = $1 WHERE "userId" = $2 AND "divisionId" = $3',
       [newMonthlySpend, userId, userDivision.divisionId || userDivision.id]
     );
     
@@ -97,8 +100,8 @@ export class DivisionsService {
     // If division changed, update
     if (newDivision.id !== (userDivision.divisionId || userDivision.id)) {
       const id = randomUUID();
-      await db.execute(
-        'INSERT INTO userDivisions (id, userId, divisionId, monthlySpend) VALUES (?, ?, ?, ?)',
+      await pool.query(
+        'INSERT INTO "userDivisions" (id, "userId", "divisionId", "monthlySpend") VALUES ($1, $2, $3, $4)',
         [id, userId, newDivision.id, newMonthlySpend]
       );
       
@@ -109,11 +112,12 @@ export class DivisionsService {
   }
   
   async resetMonthlySpends() {
-    const db = getDb();
+    const pool = await getRawDb();
+    if (!pool) throw new Error('Database not available');
     
     // Reset all monthly spends at the end of month
-    await db.execute(
-      'UPDATE userDivisions SET monthlySpend = 0'
+    await pool.query(
+      'UPDATE "userDivisions" SET "monthlySpend" = 0'
     );
   }
 }
