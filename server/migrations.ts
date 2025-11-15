@@ -30,7 +30,6 @@ export async function runMigrations() {
     
     if (checkTable.rows[0].exists) {
       console.log('✅ Database already migrated');
-      await pool.end();
       return;
     }
 
