@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { publicProcedure, router } from '../_core/trpc';
-import { getRawDb } from '../db';
+import { getPool } from '../db';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
@@ -51,18 +51,18 @@ export const telegramRouter = router({
 
       // Handle /start command
       if (text === '/start') {
-        const db = getRawDb();
+        const pool = await getPool();
         
         // Check if user exists with this Telegram ID
-        const [users]: any = await db.execute(
-          'SELECT id, username FROM users WHERE telegramChatId = ?',
+        const users = await pool.query(
+          'SELECT id, username FROM users WHERE "telegramChatId" = $1',
           [chatId.toString()]
         );
 
-        if (users.length > 0) {
+        if (users.rows.length > 0) {
           // User already linked
           await sendTelegramMessage(chatId, 
-            `✅ <b>Добро пожаловать, ${users[0].username}!</b>\n\n` +
+            `✅ <b>Добро пожаловать, ${users.rows[0].username}!</b>\n\n` +
             `Ваш Telegram уже привязан к аккаунту.\n\n` +
             `Вы будете получать коды верификации здесь.`
           );
@@ -71,8 +71,8 @@ export const telegramRouter = router({
           const linkCode = Math.random().toString(36).substring(2, 8).toUpperCase();
           
           // Store link code temporarily (expires in 10 minutes)
-          await db.execute(
-            'INSERT INTO telegramLinkCodes (code, telegramChatId, telegramUsername, expiresAt) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE))',
+          await pool.query(
+            'INSERT INTO "telegramLinkCodes" (code, "telegramChatId", "telegramUsername", "expiresAt") VALUES ($1, $2, $3, NOW() + INTERVAL \'10 minutes\')',
             [linkCode, chatId.toString(), username]
           );
 
@@ -107,29 +107,29 @@ export const telegramRouter = router({
         throw new Error('Not authenticated');
       }
 
-      const db = getRawDb();
+      const pool = await getPool();
       
       // Find link code
-      const [codes]: any = await db.execute(
-        'SELECT telegramChatId, telegramUsername FROM telegramLinkCodes WHERE code = ? AND expiresAt > NOW()',
+      const codes = await pool.query(
+        'SELECT "telegramChatId", "telegramUsername" FROM "telegramLinkCodes" WHERE code = $1 AND "expiresAt" > NOW()',
         [input.linkCode]
       );
 
-      if (codes.length === 0) {
+      if (codes.rows.length === 0) {
         throw new Error('Invalid or expired code');
       }
 
-      const { telegramChatId, telegramUsername } = codes[0];
+      const { telegramChatId, telegramUsername } = codes.rows[0];
 
       // Update user with Telegram info
-      await db.execute(
-        'UPDATE users SET telegramChatId = ?, telegramUsername = ? WHERE id = ?',
+      await pool.query(
+        'UPDATE users SET "telegramChatId" = $1, "telegramUsername" = $2 WHERE id = $3',
         [telegramChatId, telegramUsername, ctx.user.id]
       );
 
       // Delete used code
-      await db.execute(
-        'DELETE FROM telegramLinkCodes WHERE code = ?',
+      await pool.query(
+        'DELETE FROM "telegramLinkCodes" WHERE code = $1',
         [input.linkCode]
       );
 

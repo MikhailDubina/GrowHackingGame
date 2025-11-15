@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { router, protectedProcedure, publicProcedure } from "../_core/trpc";
-import { getRawDb } from "../db";
+import { getPool } from "../db";
 import { nanoid } from "nanoid";
 
 interface Review {
@@ -30,27 +30,27 @@ export const reviewsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const db = await getRawDb();
-      if (!db) {
+      const pool = await getPool();
+      if (!pool) {
         throw new Error("Database connection failed");
       }
 
       const userId = ctx.user.id;
 
       // Check if user already submitted a review
-      const [existingReview] = await db.execute<Review[]>(
-        `SELECT * FROM reviews WHERE userId = ? LIMIT 1`,
+      const existingReview = await pool.query<Review>(
+        `SELECT * FROM reviews WHERE "userId" = $1 LIMIT 1`,
         [userId]
       );
 
-      if (existingReview && existingReview.length > 0) {
+      if (existingReview.rows.length > 0) {
         throw new Error("You have already submitted a review");
       }
 
       // Insert review
       const reviewId = nanoid();
-      await db.execute(
-        `INSERT INTO reviews (id, userId, rating, comment, isApproved) VALUES (?, ?, ?, ?, ?)`,
+      await pool.query(
+        `INSERT INTO reviews (id, "userId", rating, comment, "isApproved") VALUES ($1, $2, $3, $4, $5)`,
         [reviewId, userId, input.rating, input.comment, false]
       );
 
@@ -65,21 +65,21 @@ export const reviewsRouter = router({
    */
   getApprovedReviews: publicProcedure
     .query(async () => {
-      const db = await getRawDb();
-      if (!db) {
+      const pool = await getPool();
+      if (!pool) {
         throw new Error("Database connection failed");
       }
 
-      const reviews = await db.execute<(Review & { username: string })[]>(
+      const reviews = await pool.query<Review & { username: string }>(
         `SELECT r.*, u.username 
          FROM reviews r 
-         JOIN users u ON r.userId = u.id 
-         WHERE r.isApproved = TRUE 
-         ORDER BY r.createdAt DESC 
+         JOIN users u ON r."userId" = u.id 
+         WHERE r."isApproved" = TRUE 
+         ORDER BY r."createdAt" DESC 
          LIMIT 10`
       );
 
-      return reviews[0] || [];
+      return reviews.rows || [];
     }),
 
   /**
@@ -87,18 +87,18 @@ export const reviewsRouter = router({
    */
   getMyReview: protectedProcedure
     .query(async ({ ctx }) => {
-      const db = await getRawDb();
-      if (!db) {
+      const pool = await getPool();
+      if (!pool) {
         throw new Error("Database connection failed");
       }
 
       const userId = ctx.user.id;
 
-      const [review] = await db.execute<Review[]>(
-        `SELECT * FROM reviews WHERE userId = ? LIMIT 1`,
+      const review = await pool.query<Review>(
+        `SELECT * FROM reviews WHERE "userId" = $1 LIMIT 1`,
         [userId]
       );
 
-      return review && review.length > 0 ? review[0] : null;
+      return review.rows.length > 0 ? review.rows[0] : null;
     }),
 });

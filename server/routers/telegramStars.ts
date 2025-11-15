@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { publicProcedure, router } from '../_core/trpc';
-import { getRawDb } from '../db';
+import { getPool } from '../db';
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
@@ -54,21 +54,21 @@ export const telegramStarsRouter = router({
         throw new Error('Not authenticated');
       }
 
-      const db = getRawDb();
+      const pool = await getPool();
       
       // Get user's Telegram Chat ID
       let chatId = input.telegramChatId;
       if (!chatId) {
-        const [users]: any = await db.execute(
-          'SELECT telegramChatId FROM users WHERE id = ?',
+        const users = await pool.query(
+          'SELECT "telegramChatId" FROM users WHERE id = $1',
           [ctx.user.id]
         );
         
-        if (users.length === 0 || !users[0].telegramChatId) {
+        if (users.rows.length === 0 || !users.rows[0].telegramChatId) {
           throw new Error('Telegram account not linked. Please link your Telegram first.');
         }
         
-        chatId = users[0].telegramChatId;
+        chatId = users.rows[0].telegramChatId;
       }
 
       // Create invoice
@@ -80,8 +80,8 @@ export const telegramStarsRouter = router({
 
       // Save pending payment
       const pkg = STARS_PACKAGES.find(p => p.id === input.packageId);
-      await db.execute(
-        'INSERT INTO telegramStarsPayments (userId, packageId, stars, coins, status) VALUES (?, ?, ?, ?, ?)',
+      await pool.query(
+        'INSERT INTO "telegramStarsPayments" ("userId", "packageId", stars, coins, status) VALUES ($1, $2, $3, $4, $5)',
         [ctx.user.id, input.packageId, pkg!.stars, pkg!.coins, 'pending']
       );
 
@@ -114,7 +114,7 @@ export const telegramStarsRouter = router({
       }).optional()
     }))
     .mutation(async ({ input }) => {
-      const db = getRawDb();
+      const pool = await getPool();
 
       // Handle pre-checkout query (answer OK to proceed)
       if (input.pre_checkout_query) {
@@ -137,27 +137,27 @@ export const telegramStarsRouter = router({
         const telegramUserId = input.message.from.id;
 
         // Find user by Telegram ID
-        const [users]: any = await db.execute(
-          'SELECT id FROM users WHERE telegramChatId = ?',
+        const users = await pool.query(
+          'SELECT id FROM users WHERE "telegramChatId" = $1',
           [telegramUserId.toString()]
         );
 
-        if (users.length === 0) {
+        if (users.rows.length === 0) {
           console.error('[TelegramStars] User not found for Telegram ID:', telegramUserId);
           return { success: false, error: 'User not found' };
         }
 
-        const userId = users[0].id;
+        const userId = users.rows[0].id;
 
         // Add coins to user balance
-        await db.execute(
-          'UPDATE balances SET coins = coins + ? WHERE userId = ?',
+        await pool.query(
+          'UPDATE balances SET coins = coins + $1 WHERE "userId" = $2',
           [payload.coins, userId]
         );
 
         // Update payment status
-        await db.execute(
-          'UPDATE telegramStarsPayments SET status = ?, telegramPaymentId = ?, completedAt = NOW() WHERE userId = ? AND packageId = ? AND status = ?',
+        await pool.query(
+          'UPDATE "telegramStarsPayments" SET status = $1, "telegramPaymentId" = $2, "completedAt" = NOW() WHERE "userId" = $3 AND "packageId" = $4 AND status = $5',
           ['completed', payment.telegram_payment_charge_id, userId, payload.packageId, 'pending']
         );
 
@@ -194,12 +194,12 @@ export const telegramStarsRouter = router({
         throw new Error('Not authenticated');
       }
 
-      const db = getRawDb();
-      const [payments]: any = await db.execute(
-        'SELECT packageId, stars, coins, status, createdAt, completedAt FROM telegramStarsPayments WHERE userId = ? ORDER BY createdAt DESC LIMIT 20',
+      const pool = await getPool();
+      const payments = await pool.query(
+        'SELECT "packageId", stars, coins, status, "createdAt", "completedAt" FROM "telegramStarsPayments" WHERE "userId" = $1 ORDER BY "createdAt" DESC LIMIT 20',
         [ctx.user.id]
       );
 
-      return payments;
+      return payments.rows;
     })
 });
