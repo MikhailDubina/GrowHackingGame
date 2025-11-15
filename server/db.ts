@@ -34,6 +34,11 @@ export async function getRawDb() {
   return _pool;
 }
 
+// Alias for getRawDb for consistency
+export async function getPool() {
+  return getRawDb();
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.id) {
     throw new Error("User ID is required for upsert");
