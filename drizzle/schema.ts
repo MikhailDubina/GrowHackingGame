@@ -221,3 +221,17 @@ export const userChallengeProgress = pgTable("user_challenge_progress", {
 
 export type UserChallengeProgress = InferSelectModel<typeof userChallengeProgress>;
 export type InsertUserChallengeProgress = InferInsertModel<typeof userChallengeProgress>;
+
+// Reviews table
+export const reviews = pgTable("reviews", {
+  id: text("id").primaryKey(),
+  userId: text("userId").notNull().references(() => users.id),
+  rating: integer("rating").notNull(),
+  comment: text("comment").notNull(),
+  isApproved: boolean("isApproved").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export type Review = InferSelectModel<typeof reviews>;
+export type InsertReview = InferInsertModel<typeof reviews>;
