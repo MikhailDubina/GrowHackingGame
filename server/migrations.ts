@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import pg from 'pg';
 const { Pool } = pg;
@@ -19,37 +19,71 @@ export async function runMigrations() {
   });
 
   try {
-    // Check if migrations have already been run
-    const checkTable = await pool.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-        AND table_name = 'users'
+    // Create migrations tracking table if it doesn't exist
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS _migrations (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        applied_at TIMESTAMP DEFAULT NOW()
       );
     `);
-    
-    if (checkTable.rows[0].exists) {
-      console.log('✅ Database already migrated');
-      return;
-    }
 
-    // Read migration file
-    const migrationPath = join(process.cwd(), 'drizzle', '0000_typical_sugar_man.sql');
-    const sql = readFileSync(migrationPath, 'utf8');
-    
-    // Split by statement breakpoint and execute
-    const statements = sql.split('--> statement-breakpoint');
-    
-    for (const statement of statements) {
-      const trimmed = statement.trim();
-      if (trimmed) {
-        await pool.query(trimmed);
+    // Get list of all migration files
+    const migrationsDir = join(process.cwd(), 'drizzle');
+    const migrationFiles = readdirSync(migrationsDir)
+      .filter(file => file.endsWith('.sql'))
+      .sort(); // Ensure migrations run in order
+
+    console.log(`📋 Found ${migrationFiles.length} migration file(s)`);
+
+    // Get already applied migrations
+    const appliedMigrations = await pool.query(
+      'SELECT name FROM _migrations ORDER BY id'
+    );
+    const appliedNames = new Set(appliedMigrations.rows.map(row => row.name));
+
+    // Run pending migrations
+    let appliedCount = 0;
+    for (const file of migrationFiles) {
+      if (appliedNames.has(file)) {
+        console.log(`⏭️  Skipping ${file} (already applied)`);
+        continue;
       }
+
+      console.log(`▶️  Applying migration: ${file}`);
+      
+      // Read migration file
+      const migrationPath = join(migrationsDir, file);
+      const sql = readFileSync(migrationPath, 'utf8');
+      
+      // Split by statement breakpoint and execute
+      const statements = sql.split('--> statement-breakpoint');
+      
+      for (const statement of statements) {
+        const trimmed = statement.trim();
+        if (trimmed) {
+          await pool.query(trimmed);
+        }
+      }
+
+      // Mark migration as applied
+      await pool.query(
+        'INSERT INTO _migrations (name) VALUES ($1)',
+        [file]
+      );
+
+      console.log(`✅ Applied migration: ${file}`);
+      appliedCount++;
     }
     
-    console.log('✅ Database migrations completed successfully!');
+    if (appliedCount === 0) {
+      console.log('✅ Database is up to date (no new migrations)');
+    } else {
+      console.log(`✅ Successfully applied ${appliedCount} migration(s)`);
+    }
   } catch (error: any) {
     console.error('❌ Migration failed:', error.message);
+    console.error('Stack:', error.stack);
     throw error;
   } finally {
     await pool.end();
