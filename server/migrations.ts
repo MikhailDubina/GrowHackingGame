@@ -42,6 +42,26 @@ export async function runMigrations() {
     );
     const appliedNames = new Set(appliedMigrations.rows.map(row => row.name));
 
+    // Check if database has existing tables (from old migration system)
+    const checkExistingTables = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = 'users'
+      );
+    `);
+
+    // If tables exist but no migrations are tracked, mark first migration as applied
+    if (checkExistingTables.rows[0].exists && appliedNames.size === 0 && migrationFiles.length > 0) {
+      const firstMigration = migrationFiles[0];
+      console.log(`✅ Database has existing tables, marking ${firstMigration} as already applied`);
+      await pool.query(
+        'INSERT INTO _migrations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING',
+        [firstMigration]
+      );
+      appliedNames.add(firstMigration);
+    }
+
     // Run pending migrations
     let appliedCount = 0;
     for (const file of migrationFiles) {
