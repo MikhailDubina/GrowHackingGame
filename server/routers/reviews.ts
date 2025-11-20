@@ -71,7 +71,7 @@ export const reviewsRouter = router({
       }
 
       const reviews = await pool.query<Review & { username: string }>(
-        `SELECT r.*, u.username 
+        `SELECT r.*, u.name as username 
          FROM reviews r 
          JOIN users u ON r."userId" = u.id 
          WHERE r."isApproved" = TRUE 
