@@ -172,4 +172,7 @@ export const GAME_CONFIG = {
       description: 'Continue after hitting a bomb',
     },
   },
+  attempts: {
+    dailyFree: 5, // Example value, assuming 5 free attempts per day
+  },
 };
